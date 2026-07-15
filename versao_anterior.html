@@ -5,7 +5,7 @@
   ╠══════════════════════════════════════════════════════════════════════════╣
   ║  Autor      : Bandeirinha                                                ║
   ║  Licença    : Apache 2.0                                                 ║
-  ║  Versão     : Alpha 0.6 (Treino Livre)                                   ║
+  ║  Versão     : Alpha 0.5 (Treino Livre)                                   ║
   ╠══════════════════════════════════════════════════════════════════════════╣
   ║  OBJETIVO                                                                ║
   ║  Fundir aspectos de pilotagem real de um kart IAME X30 125cc com         ║
@@ -18,8 +18,7 @@
   ╠══════════════════════════════════════════════════════════════════════════╣
   ║  FUNDAMENTOS DESTA VERSÃO                                                ║
   ║  · Tracionamento: understeer, oversteer, counter-steer                   ║
-  ║  · Linha de corrida: traçado e APEX
-  ║  · Controle de temperatura de pneus
+  ║  · Linha de corrida: traçado e APEX                                      ║
   ╠══════════════════════════════════════════════════════════════════════════╣
   ║  ARQUITETURA — SISTEMAS PRINCIPAIS                                       ║
   ║                                                                          ║
@@ -159,7 +158,6 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
       <td class="sep"></td>
       <td></td><td></td>
     </tr>
-    <tr><td>T</td><td>Temp. pneus HUD</td><td class="sep"></td><td>L</td><td>Lista de voltas</td></tr>
     </table>
   </div>
 
@@ -205,13 +203,6 @@ canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges}
              style="width:100px;accent-color:#f90;cursor:pointer"
              oninput="updateSteerSens(this.value)">
       <span id="steerSensVal" style="color:#fff;min-width:72px">MÉDIO (5)</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;font-size:.73em">
-      <span style="color:#fa0;width:150px;text-align:right">PRESSÃO DO FREIO</span>
-      <input type="range" id="brkPressSlider" min="1" max="10" value="5"
-             style="width:100px;accent-color:#f90;cursor:pointer"
-             oninput="updateBrakePressure(this.value)">
-      <span id="brkPressVal" style="color:#fff;min-width:72px">MÉDIO (5)</span>
     </div>
   </div>
 
@@ -264,12 +255,6 @@ function updateTC(v){
   if(typeof SETTINGS!=='undefined') SETTINGS.tcLevel=n;
   document.getElementById('tcVal').textContent=n===0?'DESLIGADO':n+'/10';
 }
-function updateBrakePressure(v){
-  const n=parseInt(v);
-  if(typeof SETTINGS!=='undefined') SETTINGS.brakePressure=n;
-  const lbl=n<=2?'SUAVE':n<=4?'LEVE':n===5?'MÉDIO':n<=7?'FORTE':'MÁXIMO';
-  document.getElementById('brkPressVal').textContent=lbl+' ('+n+')';
-}
 function updateSteerSens(v){
   const n=parseInt(v);
   if(typeof SETTINGS!=='undefined') SETTINGS.steerSens=n;
@@ -282,7 +267,7 @@ function updateSteerSens(v){
 'use strict';
 
 /* ── SETTINGS DE JOGO (controlados pelos sliders do menu) ── */
-const SETTINGS={tcLevel:0,steerSens:5,brakePressure:5};
+const SETTINGS={tcLevel:0,steerSens:5};
 
 const canvas=document.getElementById('game');
 const ctx=canvas.getContext('2d');
@@ -349,12 +334,9 @@ const K={
 let showLapList=true;
 let lapHistory=[]; // last 5 completed lap times (seconds)
 // Toggle on L keypress
-let showTyreHUD=true;
-
 addEventListener('keydown',e=>{
   if(e.key==='l'||e.key==='L') showLapList=!showLapList;
   if(e.key==='f'||e.key==='F') toggleFullscreen();
-  if(e.key==='t'||e.key==='T') showTyreHUD=!showTyreHUD;
 });
 
 // Persistent best laps via localStorage (up to 5)
@@ -1055,131 +1037,46 @@ function findSpline(wx,wy){
   splineIdx=bi;return bi;
 }
 
-/* ── TEMPERATURE SYSTEM ─────────────────────────────────────────
-   Modelo térmico por eixo — pneus FL/FR (frente) e RL/RR (trás)
-   são aquecidos e resfriados de forma independente.
+/* ── TEMPERATURE SYSTEM ──────────────────────────────────────── */
+const TYRE_OPT_MIN=72,TYRE_OPT_MAX=92,TYRE_MAX=118;
+const BRAKE_OPT=280,BRAKE_MAX=600;
 
-   PNEUS — zonas (°C):
-     < 45      Frio          grip 38-68%  (borracha rígida)
-     45–72     Aquecendo     grip 68-100% (rampa ascendente)
-     72–92   ★ Janela ideal  grip 100%
-     92–118    Overheating   grip 72-100% (degradação leve)
-     >118      Crítico       grip 28-72%  (degradação forte)
+const tmp={fl:30,fr:30,rl:30,rr:30,brake:50,tyreGrip:0.48,brakeEff:0.40};
 
-   FREIOS — zonas do disco (°C):
-     20–80     Frio          eff 18-60%   (pastilha fria)
-     80–150    Aquecendo     eff 60-88%
-     150–350 ★ Ideal         eff 88-100%
-     350–450   Fade inicial  eff 72-100%
-     450–600   Fade forte    eff 28-72%
-     >600      Crítico       eff 28%
+function updateTemps(dt,kart){
+  const spd=kart.speed;
+  const spdN=Math.min(1,spd/28);
 
-   FÍSICA — separação frontal/traseiro:
-   · gripF (frente) e gripR (trás) aplicados individualmente
-     a Ffy e Fry no bicycle model.
-   · Frontal frio → understeer pronunciado.
-   · Traseiro quente → oversteer facilitado.
-   · Aquecimento: scrub lateral = |latVel|×spd
-   · Assimetria de curva: pneu externo recebe até 40% mais carga
-   · Resfriamento convectivo: dT ∝ (T−Tamb)×(kBase + kSpd×v)
-   · Freio resfria ~3× mais lento que pneus (massa do disco)
+  // Tyre: heat from lateral + brake + throttle
+  const latH=Math.abs(kart.yawRate)*spd*2.6;
+  const brkH=kart.brakePedal*spd*4.0;
+  const accH=kart.accelPedal*spd*0.9;
+  const cool=0.68*dt;
 
-   CALIBRAÇÃO (equilíbrio em lap normal, spdN≈0.79):
-   · Normal   (latVel≈1.4, acc≈0.6): frente ~76°C, trás ~87°C → OPT ✓
-   · Hard     (latVel≈2.0, acc≈0.7): frente ~98°C, trás~111°C → HOT (−7−20% grip)
-   · Agressivo(latVel≈3.0, acc≈0.8): frente~135°C, trás~150°C → CRIT (−50% grip)
-   · Aquecimento cold→72°C: ~109s frontal, ~63s traseiro (~1−2 voltas a 120Hz)
-─────────────────────────────────────────────────────────────── */
-const TMP_K = {
-  T_AMB:25, T_COLD:45, T_WARM:72, T_OPT:92, T_HOT:118, T_CRIT:155,
-  K_LAT_F: 0.037,  // scrub lateral frontal
-  K_LAT_R: 0.038,  // scrub lateral traseiro
-  K_ACC:   0.015,  // calor de tração traseira
-  K_BRK_F: 0.050,  // frenagem frontal (~55% da energia de freio)
-  K_BRK_R: 0.020,  // frenagem traseira
-  K_SLIDE: 0.100,  // oversteer/donut → giro extra do pneu traseiro
-  KC_BASE: 0.008,  // resfriamento standstill (92→72°C em ~72s)
-  KC_SPD:  0.018,  // resfriamento adicional por velocidade
-  B_AMB:25, B_COLD:80, B_WARM:150, B_OPT:350, B_FADE1:450, B_FADE2:600,
-  K_BH:   10.0,    // aquecimento do freio (pedal×spd×K_BH °C/s)
-  KB_BASE: 0.006,  // resfriamento base standstill
-  KB_SPD:  0.055,  // resfriamento pelo vento — forte a alta velocidade
-};
+  tmp.rl=Math.min(TYRE_MAX,Math.max(18,tmp.rl+(latH*0.55+brkH*0.25+accH)*dt-cool));
+  tmp.rr=Math.min(TYRE_MAX,Math.max(18,tmp.rr+(latH*0.55+brkH*0.25+accH)*dt-cool));
+  tmp.fl=Math.min(TYRE_MAX,Math.max(18,tmp.fl+(latH*0.35+brkH*0.45)*dt-cool*0.9));
+  tmp.fr=Math.min(TYRE_MAX,Math.max(18,tmp.fr+(latH*0.35+brkH*0.45)*dt-cool*0.9));
 
-const tmp = {
-  fl:28, fr:28, rl:28, rr:28,
-  brake: 28,
-  tyreGripF: 0.45,  // grip frontal  → aplicado a Ffy (Cf)
-  tyreGripR: 0.45,  // grip traseiro → aplicado a Fry (Cr)
-  tyreGrip:  0.45,  // média geral (para tempStability / coldMult)
-  brakeEff:  0.18,
-};
+  // Brake: ONLY heats at speed — gate below ~5 m/s ≈ 0 heat
+  const speedGate=Math.pow(Math.max(0,(spdN-0.12)/0.88),1.8);
+  const brakeHeat=kart.brakePedal*spd*speedGate*200*dt;
+  const brakeCool=(10+spdN*65)*dt;
+  tmp.brake=Math.min(BRAKE_MAX,Math.max(28,tmp.brake+brakeHeat-brakeCool));
 
-function updateTemps(dt, kart) {
-  const K    = TMP_K;
-  const spd  = kart.speed;
-  const spdN = Math.min(1, spd / 28);
+  // Tyre grip from average
+  const avg=(tmp.fl+tmp.fr+tmp.rl+tmp.rr)/4;
+  let tg;
+  if(avg<TYRE_OPT_MIN)       tg=0.42+0.58*Math.min(1,(avg-18)/(TYRE_OPT_MIN-18));
+  else if(avg<=TYRE_OPT_MAX) tg=1.0;
+  else                        tg=1.0-0.40*Math.min(1,(avg-TYRE_OPT_MAX)/(TYRE_MAX-TYRE_OPT_MAX));
+  tmp.tyreGrip=tg;
 
-  // Assimetria de carga por curva: pneu externo aquece mais.
-  // steerAngle > 0 → virando à direita → lado direito é o externo.
-  const loadR = Math.max(0,  kart.steerAngle) / 0.20 * 0.40;
-  const loadL = Math.max(0, -kart.steerAngle) / 0.20 * 0.40;
-
-  // Fontes de calor (energia de scrub lateral + longitudinal)
-  const latScrub = Math.abs(kart.latVel) * spd;
-  const slideH   = kart.slideR * spd;
-  const brkH     = kart.brakePedal * spd;
-  const accH     = kart.accelPedal * spd;
-
-  // Resfriamento convectivo: dT = (T−Tamb)×(kBase + kSpd×spdN)×dt
-  function tCool(T) { return (T - K.T_AMB) * (K.KC_BASE + K.KC_SPD * spdN) * dt; }
-
-  // FRENTE — lateral + frenagem
-  tmp.fl = Math.max(K.T_AMB, tmp.fl + (latScrub*(1+loadL)*K.K_LAT_F + brkH*K.K_BRK_F)*dt - tCool(tmp.fl));
-  tmp.fr = Math.max(K.T_AMB, tmp.fr + (latScrub*(1+loadR)*K.K_LAT_F + brkH*K.K_BRK_F)*dt - tCool(tmp.fr));
-
-  // TRASEIRO — lateral + tração + frenagem + slide
-  tmp.rl = Math.max(K.T_AMB, tmp.rl + (latScrub*(1+loadL)*K.K_LAT_R + accH*K.K_ACC + brkH*K.K_BRK_R + slideH*K.K_SLIDE)*dt - tCool(tmp.rl));
-  tmp.rr = Math.max(K.T_AMB, tmp.rr + (latScrub*(1+loadR)*K.K_LAT_R + accH*K.K_ACC + brkH*K.K_BRK_R + slideH*K.K_SLIDE)*dt - tCool(tmp.rr));
-
-  // FREIO — aquece por potência dissipada; resfria com vento (quadrático em spd)
-  const speedGate = Math.min(1, Math.max(0, (spdN-0.10) / 0.90));
-  const bHeat     = kart.brakePedal * spd * K.K_BH * speedGate;
-  // Resfriamento: base + vento linear + vento quadrático (simula convecção forçada)
-  const bCool     = (tmp.brake - K.B_AMB) * (K.KB_BASE + K.KB_SPD * spdN + 0.040 * spdN * spdN);
-  tmp.brake = Math.max(K.B_AMB, tmp.brake + (bHeat - bCool) * dt);
-
-  // Curva de grip — contínua por segmentos, sem cap: overheating penaliza indefinidamente
-  function gripFromT(T) {
-    if (T < K.T_COLD)   return 0.38 + 0.30 * Math.max(0, T-K.T_AMB) / (K.T_COLD-K.T_AMB);
-    if (T < K.T_WARM)   return 0.68 + 0.32 * (T-K.T_COLD) / (K.T_WARM-K.T_COLD);
-    if (T <= K.T_OPT)   return 1.00;
-    if (T <= K.T_HOT)   return 1.00 - 0.28 * (T-K.T_OPT) / (K.T_HOT-K.T_OPT);
-    return Math.max(0.28, 0.72 - 0.44 * Math.min(1, (T-K.T_HOT)/(K.T_CRIT-K.T_HOT)));
-  }
-
-  tmp.tyreGripF = (gripFromT(tmp.fl) + gripFromT(tmp.fr)) * 0.50;
-  tmp.tyreGripR = (gripFromT(tmp.rl) + gripFromT(tmp.rr)) * 0.50;
-  tmp.tyreGrip  = (tmp.tyreGripF + tmp.tyreGripR) * 0.50;
-
-  // Eficiência do freio — calibrada por zona de temperatura do disco
-  const Tb = tmp.brake;
-  const K2 = TMP_K;
-  // Curva base (slider=5): pneu frio = fraco, ideal a partir de 150°C.
-  // brakePressure (slider 1–10) escala a curva: 1→×0.55, 5→×1.0, 10→×1.45
-  {
-    const bpMult = (typeof SETTINGS!=='undefined')
-      ? 0.55 + (SETTINGS.brakePressure-1) * 0.10
-      : 1.00;
-    let bBase;
-    if      (Tb < K2.B_COLD)  bBase = 0.04 + 0.26*(Tb-K2.B_AMB)  / (K2.B_COLD -K2.B_AMB);
-    else if (Tb < K2.B_WARM)  bBase = 0.30 + 0.32*(Tb-K2.B_COLD) / (K2.B_WARM -K2.B_COLD);
-    else if (Tb < K2.B_OPT)   bBase = 0.62 + 0.38*(Tb-K2.B_WARM) / (K2.B_OPT  -K2.B_WARM);
-    else if (Tb < K2.B_FADE1) bBase = 1.00 - 0.30*(Tb-K2.B_OPT)  / (K2.B_FADE1-K2.B_OPT);
-    else if (Tb < K2.B_FADE2) bBase = 0.70 - 0.42*(Tb-K2.B_FADE1)/ (K2.B_FADE2-K2.B_FADE1);
-    else                       bBase = 0.28;
-    tmp.brakeEff = Math.min(1.40, bBase * bpMult);
-  }
+  // Brake effectiveness: near zero cold, peak at opt, fade hot
+  if(tmp.brake<90)             tmp.brakeEff=0.22+0.55*(tmp.brake/90);
+  else if(tmp.brake<BRAKE_OPT) tmp.brakeEff=0.77+0.23*((tmp.brake-90)/(BRAKE_OPT-90));
+  else if(tmp.brake<BRAKE_MAX) tmp.brakeEff=1.0-0.58*((tmp.brake-BRAKE_OPT)/(BRAKE_MAX-BRAKE_OPT));
+  else                          tmp.brakeEff=0.42;
 }
 
 /* ── PHYSICS CONSTANTS ───────────────────────────────────────── */
@@ -1297,9 +1194,7 @@ function physics(dt){
   else if(kart.onBlueKerb) surfGrip=PHY.gripBlueKerb;
   else if(onGrass)         surfGrip=PHY.gripGrass;
 
-  const gripF = surfGrip * tmp.tyreGripF;  // grip eixo dianteiro
-  const gripR = surfGrip * tmp.tyreGripR;  // grip eixo traseiro
-  const grip  = (gripF + gripR) * 0.50;    // média — latVel decay / gripLevel
+  const grip=surfGrip*tmp.tyreGrip;
 
   kart.elevVel+=(sd.elev-kart.elev)*45*dt;kart.elevVel*=0.82;kart.elev+=kart.elevVel*dt;
   kart.kerbBounce=kart.onRedKerb?Math.min(1,kart.kerbBounce+6*dt):kart.kerbBounce*0.84;
@@ -1400,8 +1295,7 @@ function physics(dt){
   let brakeF=0;
   if(brakeIn>0&&kart.speed>0.1){
     const pedalBite=Math.sqrt(brakeIn);
-    const brkAggBoost=agg?1.14:1.0; // [A] pontada extra de pressão de freio
-    brakeF=PHY.brakeMax*PHY.mass*pedalBite*tmp.brakeEff*brkAggBoost;
+    brakeF=PHY.brakeMax*PHY.mass*pedalBite*tmp.brakeEff;
   }
 
   // ── LOCK-UP DETERMINÍSTICO ────────────────────────────────────
@@ -1545,7 +1439,6 @@ function physics(dt){
   // cornerThrottle: só amplifica quando throttle excede 60% em curva
   // (potência extra carregando o traseiro além da capacidade de grip)
   const cornerThrottleExcess=Math.max(0,throttleRearLoad-0.60)*Math.abs(kart.steerAngle/PHY.steerMax);
-  // coldMult (via tempStability) já incorpora a instabilidade por temperatura do pneu.
   const rearRiskMult=Math.sqrt(coldMult)
     *(1.0+cornerThrottleExcess*0.50)   // throttle em curva carrega o traseiro
     *(1.0+staminaStress*0.45)          // fadiga aumenta instabilidade
@@ -1564,8 +1457,8 @@ function physics(dt){
     if(kart.slideR>0.28&&kart.msgTimer<=0){kart.msg='OVERSTEER';kart.msgTimer=0.20;}
   } else {
     // softZoneBonus: recuperação mais fácil quando o slide ainda é leve
-    const softZoneBonus=Math.max(0,(0.5-kart.slideR)/0.5)*2.5;
-    const decayRate=(0.5+tempStability*1.2+csEffect*9.0+softZoneBonus)*spinDecay;
+    const softZoneBonus=Math.max(0,(0.5-kart.slideR)/0.5)*1.8;
+    const decayRate=(0.5+tempStability*1.0+csEffect*7.0+softZoneBonus)*spinDecay;
     kart.slideR=Math.max(0,kart.slideR-decayRate*dt);
   }
   kart.powerslide=kart.slideR>0.25;
@@ -1585,11 +1478,7 @@ function physics(dt){
        - Em curva normal (yaw<2): efeito mínimo (<15% do Mz)
   ──────────────────────────────────────────────────────────────── */
   const Mz_cs=csEffect*kart.slideR*kart.speed*PHY.mass*0.052;
-  // kFricYaw: fricção viscosa de guinada (quadrática). Limita spin contínuo.
-  const kFricYaw=1.8;
-  // extraYawDamp: ativo SOMENTE na grama, onde grip baixo reduziria a restauração
-  // natural do bicycle model → impede spin infinito fora de pista.
-  const extraYawDamp=onGrass ? 2.2 : 0.0;
+  const kFricYaw=1.8; // fricção viscosa de guinada [Nm·s²/rad²]
 
   const MzEffective=Mz*underFactor;
   const spdGate=Math.min(1,kart.speed/1.2);
@@ -1598,8 +1487,7 @@ function physics(dt){
   kart.yawRate=(MzEffective/PHY.Iz)*dt*spdGate
               -(Mz_cs/PHY.Iz)*dt*Math.sign(kart.yawRate||1)
               -kFricYaw*Math.abs(kart.yawRate)*kart.yawRate*dt
-              -(extraYawDamp*Math.abs(kart.yawRate)*kart.yawRate)*dt
-              +kart.yawRate*Math.pow(PHY.yawDampFrac,dt);
+              +kart.yawRate*Math.pow(PHY.yawDampFrac,dt);  // damping normal, sem modificação
   kart.yawRate=Math.max(-yawMax,Math.min(yawMax,kart.yawRate));
   kart.heading+=kart.yawRate*dt;
 
@@ -1613,29 +1501,7 @@ function physics(dt){
   /* SPEED */
   kart.speed+=longAcc*dt;
   kart.speed=Math.max(0,Math.min(38.89*(1+kart.slipstream*0.04),kart.speed)); // 140 km/h max
-  if(onGrass){
-    kart.speed*=1-0.30*dt;
-    // Na grama: dissipar derrapagem e rotação rapidamente
-    kart.slideR=Math.max(0,kart.slideR-12.0*dt);
-    kart.yawRate*=Math.pow(0.15,dt); // freia rotação fortemente
-  }
-
-  // Resfriamento por grama — apenas o pneu cuja posição real toca a grama.
-  // Posições no referencial local (px): fwd=frente do CG, bk=trás, ht=meia largura.
-  // heading=0 → +x; rotação: tx = kart.x + cos(h)*dx - sin(h)*dy
-  {
-    const ch=Math.cos(kart.heading), sh=Math.sin(kart.heading);
-    const fwd=27.4, bk=19.8, ht=31.5;  // px
-    const gc=0.30*dt;  // resfriamento por frame na grama
-    function onGrassAt(dx,dy){
-      const tx=kart.x+ch*dx-sh*dy, ty=kart.y+sh*dx+ch*dy;
-      return !isRoad(tx,ty)&&!isRedKerb(tx,ty)&&!isBlueKerb(tx,ty);
-    }
-    if(onGrassAt( fwd, -ht)) tmp.fl=Math.max(TMP_K.T_AMB,tmp.fl-gc);
-    if(onGrassAt( fwd,  ht)) tmp.fr=Math.max(TMP_K.T_AMB,tmp.fr-gc);
-    if(onGrassAt(-bk,  -ht)) tmp.rl=Math.max(TMP_K.T_AMB,tmp.rl-gc);
-    if(onGrassAt(-bk,   ht)) tmp.rr=Math.max(TMP_K.T_AMB,tmp.rr-gc);
-  }
+  if(onGrass) kart.speed*=1-0.30*dt;
 
   /* WORLD POSITION
      latVel contribui com fator 0.72 (era 0.32) para que o spin ocorra
@@ -2183,40 +2049,17 @@ function drawHUD(){
   bx.fillStyle='#555';bx.font='6px monospace';
   bx.fillText((kart.rpm/1000).toFixed(1)+'k',px+86,py+21);
 
-  // Brake temp bar — 5 zonas de cor calibradas
-  {
-    const Kk=TMP_K, Tb=tmp.brake;
-    bx.fillStyle='#888'; bx.font='6px monospace'; bx.fillText('BRK',px,py+36);
-    const bw=90, bx0=px+20, bY=py+30, bH=5;
-    const bRange=Kk.B_FADE2-Kk.B_AMB;
-    const bZones=[
-      {from:Kk.B_AMB,   to:Kk.B_COLD,  fill:'#1a3aaa', dim:'#060e28'},
-      {from:Kk.B_COLD,  to:Kk.B_WARM,  fill:'#1a88cc', dim:'#061828'},
-      {from:Kk.B_WARM,  to:Kk.B_OPT,   fill:'#18aa44', dim:'#061a0a'},
-      {from:Kk.B_OPT,   to:Kk.B_FADE1, fill:'#dd7700', dim:'#281200'},
-      {from:Kk.B_FADE1, to:Kk.B_FADE2, fill:'#cc1111', dim:'#280404'},
-    ];
-    bZones.forEach(function(z){
-      const x0=Math.round((z.from-Kk.B_AMB)/bRange*bw);
-      const sw=Math.round((z.to  -Kk.B_AMB)/bRange*bw)-x0;
-      bx.fillStyle=z.dim; bx.fillRect(bx0+x0,bY,sw,bH);
-      if(Tb>z.from){
-        const fp=Math.round((Math.min(Tb,z.to)-z.from)/(z.to-z.from)*sw);
-        bx.fillStyle=z.fill; bx.fillRect(bx0+x0,bY,Math.max(0,fp),bH);
-      }
-    });
-    // Cursor branco na temp atual
-    const cX=bx0+Math.min(bw-1,Math.round((Math.min(Tb,Kk.B_FADE2)-Kk.B_AMB)/bRange*bw));
-    bx.fillStyle='rgba(255,255,255,0.85)'; bx.fillRect(cX-1,bY-1,2,bH+2);
-    bx.fillStyle='#666'; bx.font='6px monospace';
-    bx.fillText(Math.round(Tb)+'°',px+20,py+40);
-    if(Tb>=Kk.B_FADE1){
-      const a=0.65+Math.sin(Date.now()*0.014)*0.30;
-      bx.fillStyle=`rgba(255,50,0,${a})`; bx.font='bold 6px monospace';
-      bx.fillText(Tb>=Kk.B_FADE2?'FADE!!':'FADE',px+70,py+40);
-    } else if(Tb<Kk.B_COLD){
-      bx.fillStyle='#3355aa88'; bx.font='6px monospace'; bx.fillText('COLD',px+70,py+40);
-    }
+  // Brake temp bar
+  bx.fillStyle='#888';bx.font='6px monospace';bx.fillText('BRK',px,py+36);
+  const bh=Math.max(0,Math.min(1,(tmp.brake-28)/(BRAKE_MAX-28)));
+  bx.fillStyle='#111';bx.fillRect(px+20,py+30,90,4);
+  bx.fillStyle=bh<0.45?'#444':bh<0.75?'#f80':'#f44';
+  bx.fillRect(px+20,py+30,90*bh,4);
+  bx.fillStyle='#555';bx.font='6px monospace';
+  bx.fillText(Math.round(tmp.brake)+'°',px+20,py+40);
+  if(tmp.brakeEff<0.62){
+    bx.fillStyle=`rgba(255,50,0,${0.65+Math.sin(Date.now()*0.012)*0.28})`;
+    bx.font='bold 6px monospace';bx.fillText('FADE',px+70,py+40);
   }
 
   // Stamina bar — shows "A" button endurance, red zone flashes when critical
@@ -2342,75 +2185,6 @@ function drawHUD(){
         bx.fillText((li===0?'▶ ':'  ')+(li+1)+'. '+fmtTime(t), LX, LY+18+li*11);
       }
     }
-  }
-
-  // ── PAINEL TEMPERATURA DE PNEUS — canto inferior direito ──────
-  // 4 pneus independentes. Barra de 5 zonas de cor. Toggle [T].
-  if(showTyreHUD){
-    const Kk=TMP_K;
-    const PW=104,PH=74,PX2=W-PW-4,PY2=H-PH-4,PAD=3;
-    bx.fillStyle='rgba(0,0,0,0.76)';
-    bx.fillRect(PX2-PAD,PY2-PAD,PW+PAD*2,PH+PAD*2);
-    bx.fillStyle='#f90'; bx.font='bold 6px monospace';
-    bx.fillText('PNEUS',PX2,PY2+7);
-    bx.fillStyle='#444'; bx.fillText('[T]',PX2+PW-18,PY2+7);
-
-    // Mapeia temperatura para cor da zona
-    function tyreZoneCol(T){
-      if(T<Kk.T_COLD)  return '#2244ee'; // frio — azul
-      if(T<Kk.T_WARM)  return '#00bbdd'; // aquecendo — ciano
-      if(T<=Kk.T_OPT)  return '#00cc44'; // janela ideal — verde
-      if(T<=Kk.T_HOT)  return '#aadd00'; // overheating — amarelo-verde
-      if(T<Kk.T_CRIT)  return '#ff8800'; // quente — laranja
-      return '#ff2424';                   // crítico — vermelho
-    }
-    // Pulsa azul quando frio — aviso visual "aqueça os pneus"
-    function tyreAl(T){ return T<Kk.T_COLD ? 0.55+Math.sin(Date.now()*0.018)*0.35 : 1.0; }
-
-    const TW2=PW/2-3, TH2=28;
-    const tiles=[
-      {lbl:'FL',val:tmp.fl, tx:PX2,        ty:PY2+10},
-      {lbl:'FR',val:tmp.fr, tx:PX2+PW/2+1, ty:PY2+10},
-      {lbl:'RL',val:tmp.rl, tx:PX2,        ty:PY2+42},
-      {lbl:'RR',val:tmp.rr, tx:PX2+PW/2+1, ty:PY2+42},
-    ];
-    const tRange=Kk.T_CRIT-Kk.T_AMB;
-    const tZones=[
-      {from:Kk.T_AMB,  to:Kk.T_COLD, c:'#1a44cc'},
-      {from:Kk.T_COLD, to:Kk.T_WARM, c:'#00aacc'},
-      {from:Kk.T_WARM, to:Kk.T_OPT,  c:'#00bb44'},
-      {from:Kk.T_OPT,  to:Kk.T_HOT,  c:'#aacc00'},
-      {from:Kk.T_HOT,  to:Kk.T_CRIT, c:'#ff7700'},
-    ];
-    tiles.forEach(function(tc){
-      const col=tyreZoneCol(tc.val);
-      bx.save(); bx.globalAlpha=tyreAl(tc.val);
-      bx.fillStyle='#0c0c0c'; bx.fillRect(tc.tx,tc.ty,TW2,TH2);
-      bx.strokeStyle=col; bx.lineWidth=1;
-      bx.strokeRect(tc.tx+0.5,tc.ty+0.5,TW2-1,TH2-1);
-      // Barra de temperatura: 5 zonas coloridas
-      const bX=tc.tx+2,bY2=tc.ty+TH2-8,bW=TW2-4,bH2=5;
-      tZones.forEach(function(z){
-        const x0=Math.round((z.from-Kk.T_AMB)/tRange*bW);
-        const sw=Math.round((z.to  -Kk.T_AMB)/tRange*bW)-x0;
-        bx.fillStyle='#111'; bx.fillRect(bX+x0,bY2,sw,bH2);
-        if(tc.val>z.from){
-          const fp=Math.round((Math.min(tc.val,z.to)-z.from)/(z.to-z.from)*sw);
-          bx.fillStyle=z.c; bx.fillRect(bX+x0,bY2,Math.max(0,fp),bH2);
-        }
-      });
-      bx.fillStyle='#666'; bx.font='bold 5px monospace'; bx.fillText(tc.lbl,tc.tx+3,tc.ty+9);
-      bx.fillStyle=col; bx.font='bold 8px monospace';
-      bx.fillText(Math.round(tc.val)+'°',tc.tx+TW2/2-8,tc.ty+18);
-      bx.restore();
-    });
-    // Linhas separadoras eixos/lados
-    bx.strokeStyle='#2a2a2a'; bx.lineWidth=1;
-    bx.beginPath(); bx.moveTo(PX2,PY2+40); bx.lineTo(PX2+PW,PY2+40); bx.stroke();
-    bx.beginPath(); bx.moveTo(PX2+PW/2,PY2+10); bx.lineTo(PX2+PW/2,PY2+PH); bx.stroke();
-    bx.fillStyle='#2a2a2a'; bx.font='5px monospace';
-    bx.fillText('FRENTE',PX2+PW/4-9,PY2+39);
-    bx.fillText('TRÁS',PX2+PW*3/4-7,PY2+39);
   }
 
   drawMinimap();
