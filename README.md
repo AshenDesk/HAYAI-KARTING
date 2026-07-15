@@ -3,7 +3,7 @@
 
 <https://loboguar4.github.io/HAYAI-KARTING/>
 
-**Alpha 0.5 — Modo Treino Livre e Tomada de Tempo**
+**Alpha 0.6 — Modo Treino Livre**
 
 > *Hayai* (速い) — japonês: rápido, veloz.
 
@@ -57,7 +57,7 @@ Ative o controle por mouse no menu e ajuste a sensibilidade pelo slider.
 
 ## Sistemas físicos implementados
 
-### Motor — IAME Parilla X30 125cc (calibrando IDLE e rotação baixa atualmente)
+### Motor — IAME Parilla X30 125cc
 Curva de torque modelada por gaussiana calibrada (~28 Nm de pico a 11.000 rpm), com shoulder secundário em ~8.500 rpm representando o comportamento real do 2T. O motor reproduz comportamento de ralenti a 3.200 rpm, power band entre 9.500–13.500 rpm e temperatura de freio afetando a eficácia.
 
 ### Modelo de pneu — Bicycle Model + Hybrid Tyre
@@ -75,7 +75,7 @@ CG baixo do kart (`h/wb = 0,22/1,05 = 0,210`). Frenagem pesada reduz o grip tras
 ### Lock-up de freio
 Acumulador de stress determinístico: `brakeStress` sobe durante frenagem pesada em alta velocidade, trava quando atinge 1,0. Pumping (soltar o freio) drena 4× mais rápido.
 
-### Temperatura (em fase de aprimoramento)
+### Temperatura // revisar
 - **Pneus:** aquecimento por forças laterais, frenagem e aceleração. Grip ótimo entre 72–92°C; acima de 118°C o grip degrada.
 - **Freios:** aquecimento proporcional à velocidade. Eficácia cresce até 280°C, fade começa após 600°C.
 
@@ -126,6 +126,7 @@ Desaceleração máxima:         32 m/s²
 
 ## Versão publicada
 
+**Alpha 0.6 — Treino Livre.** Sistema de temperatura dos freios e pneus retrabalhados, e rebalanceamento do sistema de tração.
 **Alpha 0.5 — Treino Livre.** Apenas modo de treino livre com uma pista disponível, sem adversários. Voltas válidas exigem passagem pelos dois checkpoints de setor.
 
 ---
