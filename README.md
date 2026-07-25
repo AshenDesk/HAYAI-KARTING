@@ -162,10 +162,10 @@ Para apoiar esse e mais projetos independentes:
 
 <https://www.github.com/AshenDesk>
 
-<https://www.youtube.com/@esc-SubDev>
+<https://www.youtube.com/@AshenDesk>
 
 <https://www.pixgg.com/bandeirinha>
 
 ---
 
-*HAYAI KARTING: Traction Lab — Alpha 0.5*
+*HAYAI KARTING: Traction Lab — Alpha 0.6*
