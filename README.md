@@ -1,7 +1,7 @@
 
 # HAYAI KARTING: Traction Lab
 
-<https://loboguar4.github.io/HAYAI-KARTING/>
+<https://ashendesk.github.io/HAYAI-KARTING/>
 
 **Alpha 0.6 — Modo Treino Livre**
 
@@ -160,7 +160,7 @@ Distribuído sob a licença **Apache 2.0**. Veja `LICENSE` para detalhes.
 
 Para apoiar esse e mais projetos independentes:
 
-<https://www.github.com/Loboguar4>
+<https://www.github.com/AshenDesk>
 
 <https://www.youtube.com/@esc-SubDev>
 
